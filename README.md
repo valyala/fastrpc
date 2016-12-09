@@ -19,9 +19,9 @@ Building blocks for fast rpc systems.
 It just sends batched rpc requests and responses over a single compressed
 connection. This solves the following issues:
 
-- High network bandwidth usage
-- High network packets rate
-- A lot of open TCP connections
+- High network bandwidth usage.
+- High network packets rate.
+- A lot of open TCP connections.
 
 
 # Benchmark results
