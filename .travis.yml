@@ -13,3 +13,4 @@ script:
 
   # run tests on a standard platform
   - go test -v ./...
+
