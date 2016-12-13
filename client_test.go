@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"github.com/valyala/fasthttp/fasthttputil"
+	"github.com/valyala/fastrpc/tlv"
 	"io"
 	"net"
 	"strings"
@@ -11,93 +12,9 @@ import (
 	"time"
 )
 
-type testRequest struct {
-	b       []byte
-	sizeBuf [4]byte
-}
-
-func (r *testRequest) WriteRequest(bw *bufio.Writer) error {
-	err := testWriteMessage(bw, r.b, r.sizeBuf[:])
-	if err != nil {
-		err = fmt.Errorf("cannot write request: %s", err)
-	}
-	return err
-}
-
-func (r *testRequest) ReadRequest(br *bufio.Reader) error {
-	var err error
-	r.b, err = testReadMessage(br, r.b, r.sizeBuf[:])
-	if err != nil {
-		err = fmt.Errorf("cannot read request: %s", err)
-	}
-	return err
-}
-
-type testResponse struct {
-	b       []byte
-	sizeBuf [4]byte
-}
-
-func (r *testResponse) WriteResponse(bw *bufio.Writer) error {
-	err := testWriteMessage(bw, r.b, r.sizeBuf[:])
-	if err != nil {
-		err = fmt.Errorf("cannot write response: %s", err)
-	}
-	return err
-}
-
-func (r *testResponse) ReadResponse(br *bufio.Reader) error {
-	var err error
-	r.b, err = testReadMessage(br, r.b, r.sizeBuf[:])
-	if err != nil {
-		err = fmt.Errorf("cannot read response: %s", err)
-	}
-	return err
-}
-
-func testWriteMessage(bw *bufio.Writer, msg, sizeBuf []byte) error {
-	msgSize := len(msg)
-	sizeBuf = appendUint32(sizeBuf[:0], uint32(msgSize))
-	_, err := bw.Write(sizeBuf)
-	if err == nil {
-		_, err = bw.Write(msg)
-	}
-	return err
-}
-
-func testReadMessage(br *bufio.Reader, msg, sizeBuf []byte) ([]byte, error) {
-	n, err := io.ReadFull(br, sizeBuf)
-	if err != nil {
-		return msg, fmt.Errorf("cannot read message size: %s", err)
-	}
-	if n != 4 {
-		return msg, fmt.Errorf("unexpected number of bytes read when reading message size: %d. Expecting 4", n)
-	}
-	var b [4]byte
-	copy(b[:], sizeBuf)
-	msgSize := int(bytes2Uint32(b))
-	if msgSize > 1024 {
-		return msg, fmt.Errorf("unexpectedly big response size: %d", msgSize)
-	}
-	if cap(msg) < msgSize {
-		msg = make([]byte, msgSize)
-	}
-	msg = msg[:msgSize]
-	n, err = io.ReadFull(br, msg)
-	if err != nil {
-		return msg, fmt.Errorf("cannot read response body: %s", err)
-	}
-	if n != len(msg) {
-		return msg, fmt.Errorf("unexpected number of bytes read when reading message body: %d. Expecting %d", n, len(msg))
-	}
-	return msg, nil
-}
-
 func TestClientNoServer(t *testing.T) {
 	c := &Client{
-		NewResponse: func() ResponseReader {
-			return &testResponse{}
-		},
+		NewResponse: newTestResponse,
 		Dial: func(addr string) (net.Conn, error) {
 			return nil, fmt.Errorf("no server")
 		},
@@ -108,9 +25,9 @@ func TestClientNoServer(t *testing.T) {
 	resultCh := make(chan error, iterations)
 	for i := 0; i < iterations; i++ {
 		go func() {
-			var req testRequest
-			var resp testResponse
-			req.b = []byte("foobar")
+			var req tlv.Request
+			var resp tlv.Response
+			req.SwapValue([]byte("foobar"))
 			resultCh <- c.DoDeadline(&req, &resp, deadline)
 		}()
 	}
@@ -137,9 +54,7 @@ func TestClientNoServer(t *testing.T) {
 func TestClientTimeout(t *testing.T) {
 	dialCh := make(chan struct{})
 	c := &Client{
-		NewResponse: func() ResponseReader {
-			return &testResponse{}
-		},
+		NewResponse: newTestResponse,
 		Dial: func(addr string) (net.Conn, error) {
 			<-dialCh
 			return nil, fmt.Errorf("no dial")
@@ -151,9 +66,9 @@ func TestClientTimeout(t *testing.T) {
 	resultCh := make(chan error, iterations)
 	for i := 0; i < iterations; i++ {
 		go func() {
-			var req testRequest
-			var resp testResponse
-			req.b = []byte("foobar")
+			var req tlv.Request
+			var resp tlv.Response
+			req.SwapValue([]byte("foobar"))
 			resultCh <- c.DoDeadline(&req, &resp, deadline)
 		}()
 	}
@@ -206,13 +121,13 @@ func TestClientBrokenServerCheckRequest(t *testing.T) {
 			return fmt.Errorf("cannot read reqID from the client: %s", err)
 		}
 
-		var req testRequest
+		var req tlv.Request
 		br := bufio.NewReader(conn)
 		if err = req.ReadRequest(br); err != nil {
 			return fmt.Errorf("cannot read request from the client: %s", err)
 		}
-		if string(req.b) != "foobar" {
-			return fmt.Errorf("invalid request: %q. Expecting %q", req.b, "foobar")
+		if string(req.Value) != "foobar" {
+			return fmt.Errorf("invalid request: %q. Expecting %q", req.Value, "foobar")
 		}
 
 		if _, err = conn.Write(reqID[:]); err != nil {
@@ -233,9 +148,7 @@ func testClientBrokenServer(t *testing.T, serverConnFunc func(net.Conn) error) {
 	c := &Client{
 		ProtocolVersion: 123,
 		SniffHeader:     "xxxxsss",
-		NewResponse: func() ResponseReader {
-			return &testResponse{}
-		},
+		NewResponse:     newTestResponse,
 		Dial: func(addr string) (net.Conn, error) {
 			return ln.Dial()
 		},
@@ -267,9 +180,9 @@ func testClientBrokenServer(t *testing.T, serverConnFunc func(net.Conn) error) {
 		serverStopCh <- serverConnFunc(realConn)
 	}()
 
-	var req testRequest
-	var resp testResponse
-	req.b = []byte("foobar")
+	var req tlv.Request
+	var resp tlv.Response
+	req.SwapValue([]byte("foobar"))
 	err := c.DoDeadline(&req, &resp, time.Now().Add(50*time.Millisecond))
 	if err == nil {
 		t.Fatalf("expecting error")
@@ -285,4 +198,8 @@ func testClientBrokenServer(t *testing.T, serverConnFunc func(net.Conn) error) {
 	case <-time.After(time.Second):
 		t.Fatalf("timeout")
 	}
+}
+
+func newTestResponse() ResponseReader {
+	return &tlv.Response{}
 }

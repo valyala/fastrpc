@@ -5,8 +5,8 @@ import (
 	"bytes"
 	"crypto/tls"
 	"fmt"
-	"github.com/valyala/fasthttp"
 	"github.com/valyala/fasthttp/fasthttputil"
+	"github.com/valyala/fastrpc/tlv"
 	"math/rand"
 	"net"
 	"testing"
@@ -39,8 +39,8 @@ func TestServerBrokenClientSendRequestAndCloseConn(t *testing.T) {
 			return fmt.Errorf("cannot send reqID to the server: %s", err)
 		}
 
-		var req testRequest
-		req.b = []byte("foobar")
+		var req tlv.Request
+		req.Write([]byte("foobar"))
 		bw := bufio.NewWriter(conn)
 		if err := req.WriteRequest(bw); err != nil {
 			return fmt.Errorf("cannot send request to the server: %s", err)
@@ -57,30 +57,14 @@ type nilLogger struct{}
 
 func (nl *nilLogger) Printf(fmt string, args ...interface{}) {}
 
-type testHandlerCtx struct {
-	req  testRequest
-	resp testResponse
-}
-
 func newTestHandlerCtx() HandlerCtx {
-	return &testHandlerCtx{}
+	return &tlv.HandlerCtx{
+		ConcurrencyLimitErrorHandler: concurrencyLimitErrorHandler,
+	}
 }
 
-func (ctx *testHandlerCtx) ConcurrencyLimitError(concurrency int) {
-	ctx.resp.b = []byte("too many requests")
-}
-
-func (ctx *testHandlerCtx) Init(conn net.Conn, logger fasthttp.Logger) {
-	ctx.req.b = ctx.req.b[:0]
-	ctx.resp.b = ctx.resp.b[:0]
-}
-
-func (ctx *testHandlerCtx) ReadRequest(br *bufio.Reader) error {
-	return ctx.req.ReadRequest(br)
-}
-
-func (ctx *testHandlerCtx) WriteResponse(bw *bufio.Writer) error {
-	return ctx.resp.WriteResponse(bw)
+func concurrencyLimitErrorHandler(ctx *tlv.HandlerCtx, concurrency int) {
+	ctx.Response.SwapValue([]byte("too many requests"))
 }
 
 func testServerBrokenClient(t *testing.T, clientConnFunc func(net.Conn) error) {
@@ -145,11 +129,11 @@ func TestServerWithoutTLS(t *testing.T) {
 		InsecureSkipVerify: true,
 	}
 
-	var req testRequest
-	var resp testResponse
+	var req tlv.Request
+	var resp tlv.Response
 
 	for i := 0; i < 10; i++ {
-		req.b = []byte("foobar")
+		req.SwapValue([]byte("foobar"))
 		err := c.DoDeadline(&req, &resp, time.Now().Add(time.Millisecond))
 		if err == nil {
 			t.Fatalf("expecting non-nil error")
@@ -462,8 +446,8 @@ func TestServerConcurrencyLimit(t *testing.T) {
 		Handler: func(ctxv HandlerCtx) HandlerCtx {
 			concurrencyCh <- struct{}{}
 			<-doneCh
-			ctx := ctxv.(*testHandlerCtx)
-			ctx.resp.b = []byte("done")
+			ctx := ctxv.(*tlv.HandlerCtx)
+			ctx.Response.Write([]byte("done"))
 			return ctx
 		},
 		Concurrency: concurrency,
@@ -474,15 +458,15 @@ func TestServerConcurrencyLimit(t *testing.T) {
 	resultCh := make(chan error, concurrency)
 	for i := 0; i < concurrency; i++ {
 		go func() {
-			var req testRequest
-			var resp testResponse
-			req.b = []byte("foobar")
+			var req tlv.Request
+			var resp tlv.Response
+			req.SetName("foobar")
 			if err := c.DoDeadline(&req, &resp, time.Now().Add(time.Hour)); err != nil {
 				resultCh <- err
 				return
 			}
-			if string(resp.b) != "done" {
-				resultCh <- fmt.Errorf("unexpected body: %q. Expecting %q", resp.b, "done")
+			if string(resp.Value) != "done" {
+				resultCh <- fmt.Errorf("unexpected body: %q. Expecting %q", resp.Value, "done")
 				return
 			}
 			resultCh <- nil
@@ -501,14 +485,14 @@ func TestServerConcurrencyLimit(t *testing.T) {
 	// now all the requests must fail with 'concurrency limit exceeded'
 	// error.
 	for i := 0; i < 100; i++ {
-		var req testRequest
-		var resp testResponse
-		req.b = []byte("aaa.bbb")
+		var req tlv.Request
+		var resp tlv.Response
+		req.Write([]byte("aaa.bbb"))
 		if err := c.DoDeadline(&req, &resp, time.Now().Add(time.Second)); err != nil {
 			t.Fatalf("unexpected error on iteration %d: %s", i, err)
 		}
-		if string(resp.b) != "too many requests" {
-			t.Fatalf("unexpected response on iteration %d: %q. Expecting %q", i, resp.b, "too many requests")
+		if string(resp.Value) != "too many requests" {
+			t.Fatalf("unexpected response on iteration %d: %q. Expecting %q", i, resp.Value, "too many requests")
 		}
 	}
 
@@ -641,34 +625,17 @@ func testGetBatchDelay(c *Client) error {
 }
 
 func testGetExt(c *Client, iterations int) error {
-	var req testRequest
-	var resp testResponse
+	var req tlv.Request
+	var resp tlv.Response
 	for i := 0; i < iterations; i++ {
 		s := fmt.Sprintf("foobar %d", i)
-		req.b = []byte(s)
+		req.SwapValue([]byte(s))
 		err := c.DoDeadline(&req, &resp, time.Now().Add(time.Second))
 		if err != nil {
 			return fmt.Errorf("unexpected error on iteration %d: %s", i, err)
 		}
-		if string(resp.b) != s {
-			return fmt.Errorf("unexpected body on iteration %d: %q. Expecting %q", i, resp.b, s)
-		}
-	}
-	return nil
-}
-
-func testPost(c *Client) error {
-	var req testRequest
-	var resp testResponse
-	for i := 0; i < 100; i++ {
-		expectedBody := fmt.Sprintf("body number %d", i)
-		req.b = []byte(expectedBody)
-		err := c.DoDeadline(&req, &resp, time.Now().Add(time.Second))
-		if err != nil {
-			return fmt.Errorf("unexpected error on iteration %d: %s", i, err)
-		}
-		if string(resp.b) != expectedBody {
-			return fmt.Errorf("unexpected body on iteration %d: %q. Expecting %q", i, resp.b, expectedBody)
+		if string(resp.Value) != s {
+			return fmt.Errorf("unexpected body on iteration %d: %q. Expecting %q", i, resp.Value, s)
 		}
 	}
 	return nil
@@ -676,18 +643,18 @@ func testPost(c *Client) error {
 
 func testSleep(c *Client) error {
 	var (
-		req  testRequest
-		resp testResponse
+		req  tlv.Request
+		resp tlv.Response
 	)
 	expectedBodyPrefix := []byte("slept for ")
 	for i := 0; i < 10; i++ {
-		req.b = []byte("fobar")
+		req.SwapValue([]byte("fobar"))
 		err := c.DoDeadline(&req, &resp, time.Now().Add(time.Second))
 		if err != nil {
 			return fmt.Errorf("unexpected error on iteration %d: %s", i, err)
 		}
-		if !bytes.HasPrefix(resp.b, expectedBodyPrefix) {
-			return fmt.Errorf("unexpected body prefix on iteration %d: %q. Expecting %q", i, resp.b, expectedBodyPrefix)
+		if !bytes.HasPrefix(resp.Value, expectedBodyPrefix) {
+			return fmt.Errorf("unexpected body prefix on iteration %d: %q. Expecting %q", i, resp.Value, expectedBodyPrefix)
 		}
 	}
 	return nil
@@ -695,11 +662,11 @@ func testSleep(c *Client) error {
 
 func testTimeout(c *Client) error {
 	var (
-		req  testRequest
-		resp testResponse
+		req  tlv.Request
+		resp tlv.Response
 	)
 	for i := 0; i < 10; i++ {
-		req.b = []byte("fobar")
+		req.SwapValue([]byte("fobar"))
 		err := c.DoDeadline(&req, &resp, time.Now().Add(10*time.Millisecond))
 		if err == nil {
 			return fmt.Errorf("expecting non-nil error on iteration %d", i)
@@ -713,17 +680,17 @@ func testTimeout(c *Client) error {
 
 func testNewCtx(c *Client) error {
 	var (
-		req  testRequest
-		resp testResponse
+		req  tlv.Request
+		resp tlv.Response
 	)
 	for i := 0; i < 10; i++ {
-		req.b = []byte("fobar")
+		req.SwapValue([]byte("fobar"))
 		err := c.DoDeadline(&req, &resp, time.Now().Add(100*time.Millisecond))
 		if err != nil {
 			return fmt.Errorf("unexpected error on iteration %d: %s", i, err)
 		}
-		if string(resp.b) != "new ctx!" {
-			return fmt.Errorf("unexpected body on iteration %d: %q. Expecting %q", i, resp.b, "new ctx!")
+		if string(resp.Value) != "new ctx!" {
+			return fmt.Errorf("unexpected body on iteration %d: %q. Expecting %q", i, resp.Value, "new ctx!")
 		}
 	}
 	return nil
@@ -772,9 +739,7 @@ func newTestServerExt(s *Server) (func() error, *fasthttputil.InmemoryListener) 
 
 func newTestClient(ln *fasthttputil.InmemoryListener) *Client {
 	return &Client{
-		NewResponse: func() ResponseReader {
-			return &testResponse{}
-		},
+		NewResponse: newTestResponse,
 		Dial: func(addr string) (net.Conn, error) {
 			return ln.Dial()
 		},
@@ -783,14 +748,14 @@ func newTestClient(ln *fasthttputil.InmemoryListener) *Client {
 
 func testNewCtxHandler(ctxv HandlerCtx) HandlerCtx {
 	ctxvNew := newTestHandlerCtx()
-	ctx := ctxvNew.(*testHandlerCtx)
-	ctx.resp.b = []byte("new ctx!")
+	ctx := ctxvNew.(*tlv.HandlerCtx)
+	ctx.Response.Write([]byte("new ctx!"))
 	return ctx
 }
 
 func testEchoHandler(ctxv HandlerCtx) HandlerCtx {
-	ctx := ctxv.(*testHandlerCtx)
-	ctx.resp.b = append(ctx.resp.b[:0], ctx.req.b...)
+	ctx := ctxv.(*tlv.HandlerCtx)
+	ctx.Response.Write(ctx.Request.Value)
 	return ctx
 }
 
@@ -798,8 +763,8 @@ func testSleepHandler(ctxv HandlerCtx) HandlerCtx {
 	sleepDuration := time.Duration(rand.Intn(30)) * time.Millisecond
 	time.Sleep(sleepDuration)
 	s := fmt.Sprintf("slept for %s", sleepDuration)
-	ctx := ctxv.(*testHandlerCtx)
-	ctx.resp.b = append(ctx.resp.b[:0], s...)
+	ctx := ctxv.(*tlv.HandlerCtx)
+	ctx.Response.Write([]byte(s))
 	return ctx
 }
 

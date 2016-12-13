@@ -1,7 +1,9 @@
 package fastrpc
 
 import (
+	"bytes"
 	"crypto/tls"
+	"github.com/valyala/fastrpc/tlv"
 	"runtime"
 	"sync/atomic"
 	"testing"
@@ -97,15 +99,15 @@ func benchmarkEndToEnd(b *testing.B, parallelism int, batchDelay time.Duration, 
 	if batchDelay > 0 {
 		serverBatchDelay = 100 * time.Microsecond
 	}
-	expectedBody := "Hello world foobar baz aaa bbb ccc ddd eee gklj kljsdfsdf" +
+	expectedBody := []byte("Hello world foobar baz aaa bbb ccc ddd eee gklj kljsdfsdf" +
 		"sdfasdaf asdf asdf dsa fasd fdasf afsgfdsg ertytrshdsf fds gf" +
 		"dfagsf asglsdkflaskdflkqowqiot asdkljlp 0293 4u09u0sd9fulksj lksfj lksdfj sdf" +
-		"sfjkko9u iodjsf-[9j lksdjf;lkasdj02r fsd fhjas;klfj asd;lfjwjfsd; "
+		"sfjkko9u iodjsf-[9j lksdjf;lkasdj02r fsd fhjas;klfj asd;lfjwjfsd; ")
 	s := &Server{
 		NewHandlerCtx: newTestHandlerCtx,
 		Handler: func(ctxv HandlerCtx) HandlerCtx {
-			ctx := ctxv.(*testHandlerCtx)
-			ctx.resp.b = append(ctx.resp.b[:0], expectedBody...)
+			ctx := ctxv.(*tlv.HandlerCtx)
+			ctx.Response.Write(expectedBody)
 			return ctx
 		},
 		Concurrency:      parallelism * runtime.NumCPU(),
@@ -137,15 +139,15 @@ func benchmarkEndToEnd(b *testing.B, parallelism int, batchDelay time.Duration, 
 	b.RunParallel(func(pb *testing.PB) {
 		n := atomic.AddUint32(&clientIdx, 1)
 		c := cc[int(n)%len(cc)]
-		var req testRequest
-		var resp testResponse
-		req.b = []byte("foobar")
+		var req tlv.Request
+		var resp tlv.Response
+		req.SwapValue([]byte("foobar"))
 		for pb.Next() {
 			if err := c.DoDeadline(&req, &resp, deadline); err != nil {
 				b.Fatalf("unexpected error: %s", err)
 			}
-			if string(resp.b) != expectedBody {
-				b.Fatalf("unexpected body: %q. Expecting %q", resp.b, expectedBody)
+			if !bytes.Equal(resp.Value, expectedBody) {
+				b.Fatalf("unexpected body: %q. Expecting %q", resp.Value, expectedBody)
 			}
 		}
 	})
