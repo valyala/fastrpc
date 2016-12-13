@@ -58,12 +58,12 @@ type nilLogger struct{}
 func (nl *nilLogger) Printf(fmt string, args ...interface{}) {}
 
 func newTestHandlerCtx() HandlerCtx {
-	return &tlv.HandlerCtx{
+	return &tlv.RequestCtx{
 		ConcurrencyLimitErrorHandler: concurrencyLimitErrorHandler,
 	}
 }
 
-func concurrencyLimitErrorHandler(ctx *tlv.HandlerCtx, concurrency int) {
+func concurrencyLimitErrorHandler(ctx *tlv.RequestCtx, concurrency int) {
 	ctx.Response.SwapValue([]byte("too many requests"))
 }
 
@@ -446,7 +446,7 @@ func TestServerConcurrencyLimit(t *testing.T) {
 		Handler: func(ctxv HandlerCtx) HandlerCtx {
 			concurrencyCh <- struct{}{}
 			<-doneCh
-			ctx := ctxv.(*tlv.HandlerCtx)
+			ctx := ctxv.(*tlv.RequestCtx)
 			ctx.Response.Write([]byte("done"))
 			return ctx
 		},
@@ -748,13 +748,13 @@ func newTestClient(ln *fasthttputil.InmemoryListener) *Client {
 
 func testNewCtxHandler(ctxv HandlerCtx) HandlerCtx {
 	ctxvNew := newTestHandlerCtx()
-	ctx := ctxvNew.(*tlv.HandlerCtx)
+	ctx := ctxvNew.(*tlv.RequestCtx)
 	ctx.Response.Write([]byte("new ctx!"))
 	return ctx
 }
 
 func testEchoHandler(ctxv HandlerCtx) HandlerCtx {
-	ctx := ctxv.(*tlv.HandlerCtx)
+	ctx := ctxv.(*tlv.RequestCtx)
 	ctx.Response.Write(ctx.Request.Value)
 	return ctx
 }
@@ -763,7 +763,7 @@ func testSleepHandler(ctxv HandlerCtx) HandlerCtx {
 	sleepDuration := time.Duration(rand.Intn(30)) * time.Millisecond
 	time.Sleep(sleepDuration)
 	s := fmt.Sprintf("slept for %s", sleepDuration)
-	ctx := ctxv.(*tlv.HandlerCtx)
+	ctx := ctxv.(*tlv.RequestCtx)
 	ctx.Response.Write([]byte(s))
 	return ctx
 }

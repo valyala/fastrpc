@@ -106,7 +106,7 @@ func benchmarkEndToEnd(b *testing.B, parallelism int, batchDelay time.Duration, 
 	s := &Server{
 		NewHandlerCtx: newTestHandlerCtx,
 		Handler: func(ctxv HandlerCtx) HandlerCtx {
-			ctx := ctxv.(*tlv.HandlerCtx)
+			ctx := ctxv.(*tlv.RequestCtx)
 			ctx.Response.Write(expectedBody)
 			return ctx
 		},
