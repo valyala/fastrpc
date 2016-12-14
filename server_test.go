@@ -40,7 +40,7 @@ func TestServerBrokenClientSendRequestAndCloseConn(t *testing.T) {
 		}
 
 		var req tlv.Request
-		req.Write([]byte("foobar"))
+		req.Append([]byte("foobar"))
 		bw := bufio.NewWriter(conn)
 		if err := req.WriteRequest(bw); err != nil {
 			return fmt.Errorf("cannot send request to the server: %s", err)
@@ -447,7 +447,7 @@ func TestServerConcurrencyLimit(t *testing.T) {
 			concurrencyCh <- struct{}{}
 			<-doneCh
 			ctx := ctxv.(*tlv.RequestCtx)
-			ctx.Response.Write([]byte("done"))
+			ctx.Write([]byte("done"))
 			return ctx
 		},
 		Concurrency: concurrency,
@@ -465,8 +465,8 @@ func TestServerConcurrencyLimit(t *testing.T) {
 				resultCh <- err
 				return
 			}
-			if string(resp.Value) != "done" {
-				resultCh <- fmt.Errorf("unexpected body: %q. Expecting %q", resp.Value, "done")
+			if string(resp.Value()) != "done" {
+				resultCh <- fmt.Errorf("unexpected body: %q. Expecting %q", resp.Value(), "done")
 				return
 			}
 			resultCh <- nil
@@ -487,12 +487,12 @@ func TestServerConcurrencyLimit(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		var req tlv.Request
 		var resp tlv.Response
-		req.Write([]byte("aaa.bbb"))
+		req.Append([]byte("aaa.bbb"))
 		if err := c.DoDeadline(&req, &resp, time.Now().Add(time.Second)); err != nil {
 			t.Fatalf("unexpected error on iteration %d: %s", i, err)
 		}
-		if string(resp.Value) != "too many requests" {
-			t.Fatalf("unexpected response on iteration %d: %q. Expecting %q", i, resp.Value, "too many requests")
+		if string(resp.Value()) != "too many requests" {
+			t.Fatalf("unexpected response on iteration %d: %q. Expecting %q", i, resp.Value(), "too many requests")
 		}
 	}
 
@@ -634,8 +634,8 @@ func testGetExt(c *Client, iterations int) error {
 		if err != nil {
 			return fmt.Errorf("unexpected error on iteration %d: %s", i, err)
 		}
-		if string(resp.Value) != s {
-			return fmt.Errorf("unexpected body on iteration %d: %q. Expecting %q", i, resp.Value, s)
+		if string(resp.Value()) != s {
+			return fmt.Errorf("unexpected body on iteration %d: %q. Expecting %q", i, resp.Value(), s)
 		}
 	}
 	return nil
@@ -653,8 +653,8 @@ func testSleep(c *Client) error {
 		if err != nil {
 			return fmt.Errorf("unexpected error on iteration %d: %s", i, err)
 		}
-		if !bytes.HasPrefix(resp.Value, expectedBodyPrefix) {
-			return fmt.Errorf("unexpected body prefix on iteration %d: %q. Expecting %q", i, resp.Value, expectedBodyPrefix)
+		if !bytes.HasPrefix(resp.Value(), expectedBodyPrefix) {
+			return fmt.Errorf("unexpected body prefix on iteration %d: %q. Expecting %q", i, resp.Value(), expectedBodyPrefix)
 		}
 	}
 	return nil
@@ -689,8 +689,8 @@ func testNewCtx(c *Client) error {
 		if err != nil {
 			return fmt.Errorf("unexpected error on iteration %d: %s", i, err)
 		}
-		if string(resp.Value) != "new ctx!" {
-			return fmt.Errorf("unexpected body on iteration %d: %q. Expecting %q", i, resp.Value, "new ctx!")
+		if string(resp.Value()) != "new ctx!" {
+			return fmt.Errorf("unexpected body on iteration %d: %q. Expecting %q", i, resp.Value(), "new ctx!")
 		}
 	}
 	return nil
@@ -749,13 +749,13 @@ func newTestClient(ln *fasthttputil.InmemoryListener) *Client {
 func testNewCtxHandler(ctxv HandlerCtx) HandlerCtx {
 	ctxvNew := newTestHandlerCtx()
 	ctx := ctxvNew.(*tlv.RequestCtx)
-	ctx.Response.Write([]byte("new ctx!"))
+	ctx.Write([]byte("new ctx!"))
 	return ctx
 }
 
 func testEchoHandler(ctxv HandlerCtx) HandlerCtx {
 	ctx := ctxv.(*tlv.RequestCtx)
-	ctx.Response.Write(ctx.Request.Value)
+	ctx.Write(ctx.Request.Value())
 	return ctx
 }
 
@@ -764,7 +764,7 @@ func testSleepHandler(ctxv HandlerCtx) HandlerCtx {
 	time.Sleep(sleepDuration)
 	s := fmt.Sprintf("slept for %s", sleepDuration)
 	ctx := ctxv.(*tlv.RequestCtx)
-	ctx.Response.Write([]byte(s))
+	ctx.Write([]byte(s))
 	return ctx
 }
 

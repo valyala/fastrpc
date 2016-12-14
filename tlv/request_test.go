@@ -37,8 +37,8 @@ func TestRequestMarshalUnmarshal(t *testing.T) {
 		if string(req1.Name()) != name {
 			t.Fatalf("unexpected request name read: %q. Expecting %q", req1.Name(), name)
 		}
-		if string(req1.Value) != value {
-			t.Fatalf("unexpected request value read: %q. Expecting %q", req1.Value, value)
+		if string(req1.Value()) != value {
+			t.Fatalf("unexpected request value read: %q. Expecting %q", req1.Value(), value)
 		}
 	}
 	ReleaseRequest(req1)

@@ -126,8 +126,8 @@ func TestClientBrokenServerCheckRequest(t *testing.T) {
 		if err = req.ReadRequest(br); err != nil {
 			return fmt.Errorf("cannot read request from the client: %s", err)
 		}
-		if string(req.Value) != "foobar" {
-			return fmt.Errorf("invalid request: %q. Expecting %q", req.Value, "foobar")
+		if string(req.Value()) != "foobar" {
+			return fmt.Errorf("invalid request: %q. Expecting %q", req.Value(), "foobar")
 		}
 
 		if _, err = conn.Write(reqID[:]); err != nil {

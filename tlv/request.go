@@ -8,9 +8,7 @@ import (
 
 // Request is a TLV request.
 type Request struct {
-	// Value is request value.
-	Value []byte
-
+	value   []byte
 	name    []byte
 	sizeBuf [4]byte
 }
@@ -18,7 +16,7 @@ type Request struct {
 // Reset resets the given request.
 func (req *Request) Reset() {
 	req.name = req.name[:0]
-	req.Value = req.Value[:0]
+	req.value = req.value[:0]
 }
 
 // SetName sets request name.
@@ -32,6 +30,9 @@ func (req *Request) SetNameBytes(name []byte) {
 }
 
 // Name returns request name.
+//
+// The returned value is valid until the next Request method call
+// or until ReleaseRequest is called.
 func (req *Request) Name() []byte {
 	return req.name
 }
@@ -40,17 +41,30 @@ func (req *Request) Name() []byte {
 //
 // It implements io.Writer.
 func (req *Request) Write(p []byte) (int, error) {
-	req.Value = append(req.Value, p...)
+	req.Append(p)
 	return len(p), nil
+}
+
+// Append appends p to the request value.
+func (req *Request) Append(p []byte) {
+	req.value = append(req.value, p...)
 }
 
 // SwapValue swaps the given value with the request's value.
 //
 // It is forbidden accessing the swapped value after the call.
 func (req *Request) SwapValue(value []byte) []byte {
-	v := req.Value
-	req.Value = value
+	v := req.value
+	req.value = value
 	return v
+}
+
+// Value returns request value.
+//
+// The returned value is valid until the next Request method call.
+// or until ReleaseRequest is called.
+func (req *Request) Value() []byte {
+	return req.value
 }
 
 // WriteRequest writes the request to bw.
@@ -60,7 +74,7 @@ func (req *Request) WriteRequest(bw *bufio.Writer) error {
 	if err := writeBytes(bw, req.name, req.sizeBuf[:]); err != nil {
 		return fmt.Errorf("cannot write request name: %s", err)
 	}
-	if err := writeBytes(bw, req.Value, req.sizeBuf[:]); err != nil {
+	if err := writeBytes(bw, req.value, req.sizeBuf[:]); err != nil {
 		return fmt.Errorf("cannot write request value: %s", err)
 	}
 	return nil
@@ -73,7 +87,7 @@ func (req *Request) ReadRequest(br *bufio.Reader) error {
 	if err != nil {
 		return fmt.Errorf("cannot read request name: %s", err)
 	}
-	req.Value, err = readBytes(br, req.Value[:0], req.sizeBuf[:])
+	req.value, err = readBytes(br, req.value[:0], req.sizeBuf[:])
 	if err != nil {
 		return fmt.Errorf("cannot read request value: %s", err)
 	}

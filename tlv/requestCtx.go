@@ -55,7 +55,7 @@ func (ctx *RequestCtx) Logger() fasthttp.Logger {
 	return ctx.logger
 }
 
-// Write appends p to ctx.Response.Value.
+// Write appends p to ctx.Response's value.
 //
 // It implements io.Writer.
 func (ctx *RequestCtx) Write(p []byte) (int, error) {

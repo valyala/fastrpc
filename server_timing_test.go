@@ -107,7 +107,7 @@ func benchmarkEndToEnd(b *testing.B, parallelism int, batchDelay time.Duration, 
 		NewHandlerCtx: newTestHandlerCtx,
 		Handler: func(ctxv HandlerCtx) HandlerCtx {
 			ctx := ctxv.(*tlv.RequestCtx)
-			ctx.Response.Write(expectedBody)
+			ctx.Response.Append(expectedBody)
 			return ctx
 		},
 		Concurrency:      parallelism * runtime.NumCPU(),
@@ -146,8 +146,8 @@ func benchmarkEndToEnd(b *testing.B, parallelism int, batchDelay time.Duration, 
 			if err := c.DoDeadline(&req, &resp, deadline); err != nil {
 				b.Fatalf("unexpected error: %s", err)
 			}
-			if !bytes.Equal(resp.Value, expectedBody) {
-				b.Fatalf("unexpected body: %q. Expecting %q", resp.Value, expectedBody)
+			if !bytes.Equal(resp.Value(), expectedBody) {
+				b.Fatalf("unexpected body: %q. Expecting %q", resp.Value(), expectedBody)
 			}
 		}
 	})

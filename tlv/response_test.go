@@ -31,8 +31,8 @@ func TestResponseMarshalUnmarshal(t *testing.T) {
 		if err := resp1.ReadResponse(br); err != nil {
 			t.Fatalf("unexpected error when reading response: %s", err)
 		}
-		if string(resp1.Value) != value {
-			t.Fatalf("unexpected request value read: %q. Expecting %q", resp1.Value, value)
+		if string(resp1.Value()) != value {
+			t.Fatalf("unexpected request value read: %q. Expecting %q", resp1.Value(), value)
 		}
 	}
 	ReleaseResponse(resp1)
