@@ -9,7 +9,6 @@ import (
 	"github.com/valyala/fastrpc/tlv"
 	"math/rand"
 	"net"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -534,13 +533,14 @@ func TestServerClientSendNowait(t *testing.T) {
 	err := testServerClientConcurrentExt(func() error {
 		var resp tlv.Response
 		for i := 0; i < iterations; i++ {
-			var req tlv.Request
-			if i % 2 == 0 {
+			if i%2 == 0 {
+				req := acquireTestRequest()
 				req.SwapValue([]byte("nowait!!!"))
-				for !c.SendNowait(&req) {
-					runtime.Gosched()
+				if !c.SendNowait(req, releaseTestRequest) {
+					return fmt.Errorf("cannot enqueue new request to SendNowait")
 				}
 			} else {
+				var req tlv.Request
 				s := fmt.Sprintf("foobar %d", i)
 				req.SwapValue([]byte(s))
 				err := c.DoDeadline(&req, &resp, time.Now().Add(time.Second))
@@ -839,4 +839,12 @@ func newTestServerTLSConfig() *tls.Config {
 		Certificates: []tls.Certificate{cert},
 	}
 	return tlsConfig
+}
+
+func acquireTestRequest() *tlv.Request {
+	return tlv.AcquireRequest()
+}
+
+func releaseTestRequest(req RequestWriter) {
+	tlv.ReleaseRequest(req.(*tlv.Request))
 }

@@ -104,6 +104,10 @@ type Client struct {
 	// DefaultWriteBufferSize is used by default.
 	WriteBufferSize int
 
+	// Prioritizes new requests over old requests if MaxPendingRequests pending
+	// requests is reached.
+	PrioritizeNewRequests bool
+
 	once sync.Once
 
 	lastErrLock sync.Mutex
@@ -131,11 +135,14 @@ var (
 // SendNowait schedules the given request for sending to the server
 // set in Client.Addr.
 //
-// Response for the given request is ignored.
+// req cannot be used after SendNowait returns and until releaseReq is called.
+// releaseReq is called when the req is no longer needed and may be re-used.
 //
 // Returns true if the request is successfully scheduled for sending,
 // otherwise returns false.
-func (c *Client) SendNowait(req RequestWriter) bool {
+//
+// Response for the given request is ignored.
+func (c *Client) SendNowait(req RequestWriter, releaseReq func(req RequestWriter)) bool {
 	c.once.Do(c.init)
 
 	// Do not track 'nowait' request as a pending request, since it
@@ -143,6 +150,7 @@ func (c *Client) SendNowait(req RequestWriter) bool {
 
 	wi := acquireClientWorkItem()
 	wi.req = req
+	wi.releaseReq = releaseReq
 	wi.deadline = time.Now().Add(10 * time.Second)
 	if err := c.enqueueWorkItem(wi); err != nil {
 		releaseClientWorkItem(wi)
@@ -193,10 +201,14 @@ func (c *Client) enqueueWorkItem(wi *clientWorkItem) error {
 	case c.pendingRequests <- wi:
 		return nil
 	default:
+		if !c.PrioritizeNewRequests {
+			return ErrPendingRequestsOverflow
+		}
+
 		// slow path
 		select {
 		case wiOld := <-c.pendingRequests:
-			wiOld.done <- c.getError(ErrPendingRequestsOverflow)
+			c.doneError(wiOld, ErrPendingRequestsOverflow)
 			select {
 			case c.pendingRequests <- wi:
 				return nil
@@ -431,7 +443,17 @@ func (c *Client) connWriter(bw *bufio.Writer, conn net.Conn, stopCh <-chan struc
 			c.doneError(wi, err)
 			return err
 		}
-		if err := wi.req.WriteRequest(bw); err != nil {
+
+		err := wi.req.WriteRequest(bw)
+
+		// The req is no longer needed, so release it.
+		if wi.releaseReq != nil {
+			wi.releaseReq(wi.req)
+			wi.req = nil
+			wi.releaseReq = nil
+		}
+
+		if err != nil {
 			err = fmt.Errorf("cannot send request to the server: %s", err)
 			c.doneError(wi, err)
 			return err
@@ -543,10 +565,11 @@ func (c *Client) setLastError(err error) {
 }
 
 type clientWorkItem struct {
-	req      RequestWriter
-	resp     ResponseReader
-	deadline time.Time
-	done     chan error
+	req        RequestWriter
+	resp       ResponseReader
+	releaseReq func(req RequestWriter)
+	deadline   time.Time
+	done       chan error
 }
 
 func acquireClientWorkItem() *clientWorkItem {
@@ -567,8 +590,15 @@ func releaseClientWorkItem(wi *clientWorkItem) {
 	if len(wi.done) != 0 {
 		panic("BUG: clientWorkItem.done must be empty")
 	}
+	if wi.releaseReq != nil {
+		if wi.resp != nil {
+			panic("BUG: clientWorkItem.resp must be nil")
+		}
+		wi.releaseReq(wi.req)
+	}
 	wi.req = nil
 	wi.resp = nil
+	wi.releaseReq = nil
 	clientWorkItemPool.Put(wi)
 }
 
