@@ -128,6 +128,29 @@ var (
 		"reduce requests rate or speed up the server")
 )
 
+// SendNowait schedules the given request for sending to the server
+// set in Client.Addr.
+//
+// Response for the given request is ignored.
+//
+// Returns true if the request is successfully scheduled for sending,
+// otherwise returns false.
+func (c *Client) SendNowait(req RequestWriter) bool {
+	c.once.Do(c.init)
+
+	// Do not track 'nowait' request as a pending request, since it
+	// has no response.
+
+	wi := acquireClientWorkItem()
+	wi.req = req
+	wi.deadline = time.Now().Add(10 * time.Second)
+	if err := c.enqueueWorkItem(wi); err != nil {
+		releaseClientWorkItem(wi)
+		return false
+	}
+	return true
+}
+
 // DoDeadline sends the given request to the server set in Client.Addr.
 //
 // ErrTimeout is returned if the server didn't return response until
@@ -234,11 +257,11 @@ func (c *Client) unblockStaleRequests() bool {
 		select {
 		case wi := <-c.pendingRequests:
 			if t.After(wi.deadline) {
-				wi.done <- c.getError(ErrTimeout)
+				c.doneError(wi, ErrTimeout)
 				found = true
 			} else {
 				if err := c.enqueueWorkItem(wi); err != nil {
-					wi.done <- c.getError(err)
+					c.doneError(wi, err)
 				}
 			}
 		default:
@@ -254,7 +277,7 @@ func (c *Client) unblockStaleResponses() bool {
 	c.pendingResponsesLock.Lock()
 	for reqID, wi := range c.pendingResponses {
 		if t.After(wi.deadline) {
-			wi.done <- c.getError(ErrTimeout)
+			c.doneError(wi, ErrTimeout)
 			delete(c.pendingResponses, reqID)
 			found = true
 		}
@@ -280,7 +303,7 @@ func (c *Client) worker() {
 		// Wait for the first request before dialing the server.
 		wi := <-c.pendingRequests
 		if err := c.enqueueWorkItem(wi); err != nil {
-			wi.done <- c.getError(err)
+			c.doneError(wi, err)
 		}
 
 		conn, err := dial(c.Addr)
@@ -382,7 +405,7 @@ func (c *Client) connWriter(bw *bufio.Writer, conn net.Conn, stopCh <-chan struc
 
 		t := time.Now()
 		if t.After(wi.deadline) {
-			wi.done <- c.getError(ErrTimeout)
+			c.doneError(wi, ErrTimeout)
 			continue
 		}
 
@@ -405,12 +428,12 @@ func (c *Client) connWriter(bw *bufio.Writer, conn net.Conn, stopCh <-chan struc
 		b := appendUint32(buf[:0], reqID)
 		if _, err := bw.Write(b); err != nil {
 			err = fmt.Errorf("cannot send request ID to the server: %s", err)
-			wi.done <- c.getError(err)
+			c.doneError(wi, err)
 			return err
 		}
 		if err := wi.req.WriteRequest(bw); err != nil {
 			err = fmt.Errorf("cannot send request to the server: %s", err)
-			wi.done <- c.getError(err)
+			c.doneError(wi, err)
 			return err
 		}
 
@@ -418,7 +441,7 @@ func (c *Client) connWriter(bw *bufio.Writer, conn net.Conn, stopCh <-chan struc
 		if _, ok := c.pendingResponses[reqID]; ok {
 			c.pendingResponsesLock.Unlock()
 			err := fmt.Errorf("request ID overflow. id=%d", reqID)
-			wi.done <- c.getError(err)
+			c.doneError(wi, err)
 			return err
 		}
 		c.pendingResponses[reqID] = wi
@@ -476,26 +499,30 @@ func (c *Client) connReader(br *bufio.Reader, conn net.Conn) error {
 		delete(c.pendingResponses, reqID)
 		c.pendingResponsesLock.Unlock()
 
-		if wi == nil {
-			// just skip response by reading it into zeroResp,
-			// since wi may be already deleted
-			// by unblockStaleResponses.
-			resp = zeroResp
-		} else {
+		if wi != nil {
 			resp = wi.resp
+		}
+		if resp == nil {
+			resp = zeroResp
 		}
 
 		if err := resp.ReadResponse(br); err != nil {
 			err = fmt.Errorf("cannot read response with ID %d: %s", reqID, err)
 			if wi != nil {
-				wi.done <- c.getError(err)
+				c.doneError(wi, err)
 			}
 			return err
 		}
 
-		if wi != nil {
+		if wi != nil && wi.resp != nil {
 			wi.done <- nil
 		}
+	}
+}
+
+func (c *Client) doneError(wi *clientWorkItem, err error) {
+	if wi.resp != nil {
+		wi.done <- c.getError(err)
 	}
 }
 

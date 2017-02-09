@@ -9,6 +9,8 @@ import (
 	"github.com/valyala/fastrpc/tlv"
 	"math/rand"
 	"net"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -514,6 +516,61 @@ func TestServerConcurrencyLimit(t *testing.T) {
 	}
 }
 
+func TestServerClientSendNowait(t *testing.T) {
+	const iterations = 100
+	const concurrency = 10
+	callsCh := make(chan struct{}, concurrency*iterations)
+	h := func(ctxv HandlerCtx) HandlerCtx {
+		ctx := ctxv.(*tlv.RequestCtx)
+		s := string(ctx.Request.Value())
+		if strings.HasPrefix(s, "foobar ") {
+			ctx.Write([]byte(s))
+		}
+		callsCh <- struct{}{}
+		return ctx
+	}
+	serverStop, c := newTestServerClient(h)
+
+	err := testServerClientConcurrentExt(func() error {
+		var resp tlv.Response
+		for i := 0; i < iterations; i++ {
+			var req tlv.Request
+			if i % 2 == 0 {
+				req.SwapValue([]byte("nowait!!!"))
+				for !c.SendNowait(&req) {
+					runtime.Gosched()
+				}
+			} else {
+				s := fmt.Sprintf("foobar %d", i)
+				req.SwapValue([]byte(s))
+				err := c.DoDeadline(&req, &resp, time.Now().Add(time.Second))
+				if err != nil {
+					return fmt.Errorf("unexpected error in DoDeadline on iteration %d: %s", i, err)
+				}
+				if string(resp.Value()) != s {
+					return fmt.Errorf("unexpected body on iteration %d: %q. Expecting %q", i, resp.Value(), s)
+				}
+			}
+		}
+		return nil
+	}, concurrency)
+	if err != nil {
+		t.Fatalf("unexpected error: %s", err)
+	}
+
+	for i := 0; i < concurrency*iterations; i++ {
+		select {
+		case <-callsCh:
+		case <-time.After(time.Second):
+			t.Fatalf("timeout on iteration %d", i)
+		}
+	}
+
+	if err := serverStop(); err != nil {
+		t.Fatalf("cannot shutdown server: %s", err)
+	}
+}
+
 func TestServerEchoSerial(t *testing.T) {
 	serverStop, c := newTestServerClient(testEchoHandler)
 
@@ -595,7 +652,10 @@ func TestServerMultiClientsConcurrent(t *testing.T) {
 }
 
 func testServerClientConcurrent(testFunc func() error) error {
-	const concurrency = 10
+	return testServerClientConcurrentExt(testFunc, 10)
+}
+
+func testServerClientConcurrentExt(testFunc func() error, concurrency int) error {
 	resultCh := make(chan error, concurrency)
 	for i := 0; i < concurrency; i++ {
 		go func() {
