@@ -151,7 +151,7 @@ func (c *Client) SendNowait(req RequestWriter, releaseReq func(req RequestWriter
 	wi := acquireClientWorkItem()
 	wi.req = req
 	wi.releaseReq = releaseReq
-	wi.deadline = time.Now().Add(10 * time.Second)
+	wi.deadline = coarseTimeNow().Add(10 * time.Second)
 	if err := c.enqueueWorkItem(wi); err != nil {
 		releaseClientWorkItem(wi)
 		return false
@@ -415,7 +415,7 @@ func (c *Client) connWriter(bw *bufio.Writer, conn net.Conn, stopCh <-chan struc
 			}
 		}
 
-		t := time.Now()
+		t := coarseTimeNow()
 		if t.After(wi.deadline) {
 			c.doneError(wi, ErrTimeout)
 			continue
@@ -428,7 +428,7 @@ func (c *Client) connWriter(bw *bufio.Writer, conn net.Conn, stopCh <-chan struc
 			// Optimization: update write deadline only if more than 25%
 			// of the last write deadline exceeded.
 			// See https://github.com/golang/go/issues/15133 for details.
-			t := time.Now()
+			t := coarseTimeNow()
 			if t.Sub(lastWriteDeadline) > (writeTimeout >> 2) {
 				if err := conn.SetReadDeadline(t.Add(writeTimeout)); err != nil {
 					return fmt.Errorf("cannot update write deadline: %s", err)
@@ -496,7 +496,7 @@ func (c *Client) connReader(br *bufio.Reader, conn net.Conn) error {
 			// Optimization: update read deadline only if more than 25%
 			// of the last read deadline exceeded.
 			// See https://github.com/golang/go/issues/15133 for details.
-			t := time.Now()
+			t := coarseTimeNow()
 			if t.Sub(lastReadDeadline) > (readTimeout >> 2) {
 				if err := conn.SetReadDeadline(t.Add(readTimeout)); err != nil {
 					return fmt.Errorf("cannot update read deadline: %s", err)
