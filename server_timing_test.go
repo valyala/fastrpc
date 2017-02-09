@@ -90,6 +90,68 @@ func BenchmarkEndToEndPipeline1000(b *testing.B) {
 	benchmarkEndToEnd(b, 1000, 0, CompressNone, false, true)
 }
 
+func BenchmarkSendNowait(b *testing.B) {
+	bN := uint64(b.N)
+	var n uint64
+	doneCh := make(chan struct{})
+	s := &Server{
+		NewHandlerCtx: newTestHandlerCtx,
+		Handler: func(ctxv HandlerCtx) HandlerCtx {
+			x := atomic.AddUint64(&n, 1)
+			if x == bN {
+				close(doneCh)
+			}
+			return ctxv
+		},
+		Concurrency:      runtime.GOMAXPROCS(-1),
+		CompressType:     CompressNone,
+		PipelineRequests: true,
+	}
+	serverStop, ln := newTestServerExt(s)
+
+	value := []byte("foobar")
+	b.RunParallel(func(pb *testing.PB) {
+		c := newTestClient(ln)
+		c.MaxPendingRequests = 1e2
+		c.CompressType = CompressNone
+		for pb.Next() {
+			for {
+				req := acquireTestRequest()
+				req.Append(value)
+				if c.SendNowait(req, releaseTestRequest) {
+					break
+				}
+				runtime.Gosched()
+			}
+		}
+	})
+	runtime.Gosched()
+
+	// Add skipped requests.
+	// Requests may be skipped by cleaners.
+	c := newTestClient(ln)
+	for {
+		x := atomic.LoadUint64(&n)
+		if x >= bN {
+			break
+		}
+		req := acquireTestRequest()
+		req.Append(value)
+		c.SendNowait(req, releaseTestRequest)
+		runtime.Gosched()
+	}
+
+	select {
+	case <-doneCh:
+	case <-time.After(10 * time.Second):
+		b.Fatalf("timeout. n=%d, b.N=%d", n, b.N)
+	}
+
+	if err := serverStop(); err != nil {
+		b.Fatalf("cannot shutdown server: %s", err)
+	}
+}
+
 func benchmarkEndToEnd(b *testing.B, parallelism int, batchDelay time.Duration, compressType CompressType, isTLS, pipelineRequests bool) {
 	var tlsConfig *tls.Config
 	if isTLS {
