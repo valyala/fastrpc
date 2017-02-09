@@ -544,8 +544,12 @@ func (c *Client) connReader(br *bufio.Reader, conn net.Conn) error {
 			return err
 		}
 
-		if wi != nil && wi.resp != nil {
-			wi.done <- nil
+		if wi != nil {
+			if wi.resp != nil {
+				wi.done <- nil
+			} else {
+				releaseClientWorkItem(wi)
+			}
 		}
 	}
 }
@@ -553,6 +557,8 @@ func (c *Client) connReader(br *bufio.Reader, conn net.Conn) error {
 func (c *Client) doneError(wi *clientWorkItem, err error) {
 	if wi.resp != nil {
 		wi.done <- c.getError(err)
+	} else {
+		releaseClientWorkItem(wi)
 	}
 }
 
