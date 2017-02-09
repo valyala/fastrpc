@@ -166,10 +166,10 @@ func (c *Client) SendNowait(req RequestWriter, releaseReq func(req RequestWriter
 func (c *Client) DoDeadline(req RequestWriter, resp ResponseReader, deadline time.Time) error {
 	c.once.Do(c.init)
 
-	n := int(atomic.AddUint32(&c.pendingRequestsCount, 1))
+	n := c.incPendingRequests()
 
 	if n >= c.maxPendingRequests() {
-		atomic.AddUint32(&c.pendingRequestsCount, ^uint32(0))
+		c.decPendingRequests()
 		return c.getError(ErrPendingRequestsOverflow)
 	}
 
@@ -178,7 +178,7 @@ func (c *Client) DoDeadline(req RequestWriter, resp ResponseReader, deadline tim
 	wi.resp = resp
 	wi.deadline = deadline
 	if err := c.enqueueWorkItem(wi); err != nil {
-		atomic.AddUint32(&c.pendingRequestsCount, ^uint32(0))
+		c.decPendingRequests()
 		releaseClientWorkItem(wi)
 		return c.getError(err)
 	}
@@ -191,7 +191,7 @@ func (c *Client) DoDeadline(req RequestWriter, resp ResponseReader, deadline tim
 
 	releaseClientWorkItem(wi)
 
-	atomic.AddUint32(&c.pendingRequestsCount, ^uint32(0))
+	c.decPendingRequests()
 
 	return err
 }
@@ -304,6 +304,14 @@ func (c *Client) unblockStaleResponses() bool {
 // or for load balancing purposes.
 func (c *Client) PendingRequests() int {
 	return int(atomic.LoadUint32(&c.pendingRequestsCount))
+}
+
+func (c *Client) incPendingRequests() int {
+	return int(atomic.AddUint32(&c.pendingRequestsCount, 1))
+}
+
+func (c *Client) decPendingRequests() {
+	atomic.AddUint32(&c.pendingRequestsCount, ^uint32(0))
 }
 
 func (c *Client) worker() {
