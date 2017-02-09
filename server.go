@@ -277,14 +277,22 @@ func (s *Server) connReader(br *bufio.Reader, conn net.Conn, pendingResponses ch
 }
 
 func (s *Server) handleRequest(wi *serverWorkItem, pendingResponses chan<- *serverWorkItem, stopCh <-chan struct{}) {
+	reqID := wi.reqID
 	ctxNew := s.Handler(wi.ctx)
+	if isZeroReqID(reqID) {
+		// Do not send response for SendNowait request.
+		if ctxNew == wi.ctx {
+			s.releaseWorkItem(wi)
+		}
+		return
+	}
+
 	if ctxNew != wi.ctx {
 		if ctxNew == nil {
 			panic("BUG: Server.Handler mustn't return nil")
 		}
 		// The current ctx may be still in use by the handler.
 		// So create new wi for passing to pendingResponses.
-		reqID := wi.reqID
 		wi = s.acquireWorkItem()
 		wi.reqID = reqID
 		wi.ctx = ctxNew
@@ -400,4 +408,8 @@ func (s *Server) logger() fasthttp.Logger {
 		return s.Logger
 	}
 	return defaultLogger
+}
+
+func isZeroReqID(reqID [4]byte) bool {
+	return reqID[0] == 0 && reqID[1] == 0 && reqID[2] == 0 && reqID[3] == 0
 }
