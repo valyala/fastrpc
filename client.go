@@ -429,8 +429,14 @@ func (c *Client) connWriter(bw *bufio.Writer, conn net.Conn, stopCh <-chan struc
 			continue
 		}
 
-		reqID := c.reqID
-		c.reqID++
+		reqID := uint32(0)
+		if wi.resp != nil {
+			c.reqID++
+			if c.reqID == 0 {
+				c.reqID = 1
+			}
+			reqID = c.reqID
+		}
 
 		if writeTimeout > 0 {
 			// Optimization: update write deadline only if more than 25%
@@ -452,30 +458,26 @@ func (c *Client) connWriter(bw *bufio.Writer, conn net.Conn, stopCh <-chan struc
 			return err
 		}
 
-		err := wi.req.WriteRequest(bw)
-
-		// The req is no longer needed, so release it.
-		if wi.releaseReq != nil {
-			wi.releaseReq(wi.req)
-			wi.req = nil
-			wi.releaseReq = nil
-		}
-
-		if err != nil {
+		if err := wi.req.WriteRequest(bw); err != nil {
 			err = fmt.Errorf("cannot send request to the server: %s", err)
 			c.doneError(wi, err)
 			return err
 		}
 
-		c.pendingResponsesLock.Lock()
-		if _, ok := c.pendingResponses[reqID]; ok {
+		if wi.resp == nil {
+			// wi is no longer needed, so release it.
+			releaseClientWorkItem(wi)
+		} else {
+			c.pendingResponsesLock.Lock()
+			if _, ok := c.pendingResponses[reqID]; ok {
+				c.pendingResponsesLock.Unlock()
+				err := fmt.Errorf("request ID overflow. id=%d", reqID)
+				c.doneError(wi, err)
+				return err
+			}
+			c.pendingResponses[reqID] = wi
 			c.pendingResponsesLock.Unlock()
-			err := fmt.Errorf("request ID overflow. id=%d", reqID)
-			c.doneError(wi, err)
-			return err
 		}
-		c.pendingResponses[reqID] = wi
-		c.pendingResponsesLock.Unlock()
 
 		// re-arm flush channel
 		if len(c.pendingRequests) == 0 {
@@ -529,6 +531,7 @@ func (c *Client) connReader(br *bufio.Reader, conn net.Conn) error {
 		delete(c.pendingResponses, reqID)
 		c.pendingResponsesLock.Unlock()
 
+		resp = nil
 		if wi != nil {
 			resp = wi.resp
 		}
@@ -545,11 +548,10 @@ func (c *Client) connReader(br *bufio.Reader, conn net.Conn) error {
 		}
 
 		if wi != nil {
-			if wi.resp != nil {
-				wi.done <- nil
-			} else {
-				releaseClientWorkItem(wi)
+			if wi.resp == nil {
+				panic("BUG: clientWorkItem.resp must be non-nil")
 			}
+			wi.done <- nil
 		}
 	}
 }
