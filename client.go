@@ -251,8 +251,8 @@ func (c *Client) init() {
 				}
 			} else {
 				sleepDuration = time.Duration(1.5 * float64(sleepDuration))
-				if sleepDuration > 10*time.Second {
-					sleepDuration = 10 * time.Second
+				if sleepDuration > time.Second {
+					sleepDuration = time.Second
 				}
 			}
 		}
