@@ -103,7 +103,7 @@ func BenchmarkSendNowait(b *testing.B) {
 			}
 			return ctxv
 		},
-		Concurrency:      runtime.GOMAXPROCS(-1),
+		Concurrency:      runtime.GOMAXPROCS(-1) + 1,
 		CompressType:     CompressNone,
 		PipelineRequests: true,
 	}

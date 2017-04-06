@@ -145,6 +145,8 @@ func (s *Server) Serve(ln net.Listener) error {
 	if s.Handler == nil {
 		panic("BUG: Server.Handler must be set")
 	}
+	concurrency := s.concurrency()
+	pipelineRequests := s.PipelineRequests
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -166,11 +168,23 @@ func (s *Server) Serve(ln net.Listener) error {
 			panic("BUG: net.Listener returned (nil, nil)")
 		}
 
+		if pipelineRequests {
+			n := int(atomic.AddUint32(&s.concurrencyCount, 1))
+			if n > concurrency {
+				atomic.AddUint32(&s.concurrencyCount, ^uint32(0))
+				s.logger().Printf("fastrpc.Server: concurrency limit exceeded: %d", concurrency)
+				continue
+			}
+		}
+
 		go func() {
 			laddr := conn.LocalAddr().String()
 			raddr := conn.RemoteAddr().String()
 			if err := s.serveConn(conn); err != nil {
 				s.logger().Printf("fastrpc.Server: error on connection %q<->%q: %s", laddr, raddr, err)
+			}
+			if pipelineRequests {
+				atomic.AddUint32(&s.concurrencyCount, ^uint32(0))
 			}
 		}()
 	}
@@ -222,6 +236,7 @@ func (s *Server) serveConn(conn net.Conn) error {
 func (s *Server) connReader(br *bufio.Reader, conn net.Conn, pendingResponses chan<- *serverWorkItem, stopCh <-chan struct{}) error {
 	logger := s.logger()
 	concurrency := s.concurrency()
+	pipelineRequests := s.PipelineRequests
 	readTimeout := s.ReadTimeout
 	var lastReadDeadline time.Time
 	for {
@@ -234,7 +249,7 @@ func (s *Server) connReader(br *bufio.Reader, conn net.Conn, pendingResponses ch
 			t := coarseTimeNow()
 			if t.Sub(lastReadDeadline) > (readTimeout >> 2) {
 				if err := conn.SetReadDeadline(t.Add(readTimeout)); err != nil {
-					return fmt.Errorf("cannot update read deadline: %s", err)
+					panic(fmt.Sprintf("BUG: cannot update read deadline: %s", err))
 				}
 				lastReadDeadline = t
 			}
@@ -254,20 +269,18 @@ func (s *Server) connReader(br *bufio.Reader, conn net.Conn, pendingResponses ch
 			return fmt.Errorf("cannot read request: %s", err)
 		}
 
-		n := int(atomic.AddUint32(&s.concurrencyCount, 1))
-		if n > concurrency {
-			atomic.AddUint32(&s.concurrencyCount, ^uint32(0))
-			wi.ctx.ConcurrencyLimitError(concurrency)
-			if !pushPendingResponse(pendingResponses, wi, stopCh) {
-				return nil
-			}
-			continue
-		}
-
-		if s.PipelineRequests {
+		if pipelineRequests {
 			s.handleRequest(wi, pendingResponses, stopCh)
-			atomic.AddUint32(&s.concurrencyCount, ^uint32(0))
 		} else {
+			n := int(atomic.AddUint32(&s.concurrencyCount, 1))
+			if n > concurrency {
+				atomic.AddUint32(&s.concurrencyCount, ^uint32(0))
+				wi.ctx.ConcurrencyLimitError(concurrency)
+				if !pushPendingResponse(pendingResponses, wi, stopCh) {
+					return nil
+				}
+				continue
+			}
 			go func(wi *serverWorkItem) {
 				s.handleRequest(wi, pendingResponses, stopCh)
 				atomic.AddUint32(&s.concurrencyCount, ^uint32(0))
@@ -355,7 +368,7 @@ func (s *Server) connWriter(bw *bufio.Writer, conn net.Conn, pendingResponses <-
 			t := coarseTimeNow()
 			if t.Sub(lastWriteDeadline) > (writeTimeout >> 2) {
 				if err := conn.SetReadDeadline(t.Add(writeTimeout)); err != nil {
-					return fmt.Errorf("cannot update write deadline: %s", err)
+					panic(fmt.Sprintf("BUG: cannot update write deadline: %s", err))
 				}
 				lastWriteDeadline = t
 			}
