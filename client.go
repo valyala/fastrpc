@@ -526,10 +526,8 @@ func (c *Client) connReader(br *bufio.Reader, conn net.Conn) error {
 			}
 		}
 
-		if n, err := io.ReadFull(br, buf[:]); err != nil {
-			if n == 0 {
-				// Ignore error if no bytes are read, since
-				// the server may just close the connection.
+		if _, err := io.ReadFull(br, buf[:]); err != nil {
+			if err == io.EOF {
 				return nil
 			}
 			return fmt.Errorf("cannot read response ID: %s", err)
