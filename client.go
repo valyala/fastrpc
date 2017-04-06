@@ -335,10 +335,21 @@ func (c *Client) worker() {
 		c.setLastError(err)
 		laddr := conn.LocalAddr().String()
 		raddr := conn.RemoteAddr().String()
-		if err = c.serveConn(conn); err != nil {
-			err = fmt.Errorf("error on connection %q<->%q: %s", laddr, raddr, err)
+		err = c.serveConn(conn)
+
+		// close all the pending responses, since they cannot be completed
+		// after the connection is closed.
+		if err == nil {
+			c.setLastError(fmt.Errorf("%s<->%s: connection closed by server", laddr, raddr))
+		} else {
+			c.setLastError(fmt.Errorf("%s<->%s: %s", laddr, raddr, err))
 		}
-		c.setLastError(err)
+		c.pendingResponsesLock.Lock()
+		for reqID, wi := range c.pendingResponses {
+			c.doneError(wi, nil)
+			delete(c.pendingResponses, reqID)
+		}
+		c.pendingResponsesLock.Unlock()
 	}
 }
 
@@ -405,6 +416,7 @@ func (c *Client) connWriter(bw *bufio.Writer, conn net.Conn, stopCh <-chan struc
 
 	writeTimeout := c.WriteTimeout
 	var lastWriteDeadline time.Time
+	var nextReqID uint32
 	for {
 		select {
 		case wi = <-c.pendingRequests:
@@ -431,21 +443,20 @@ func (c *Client) connWriter(bw *bufio.Writer, conn net.Conn, stopCh <-chan struc
 
 		reqID := uint32(0)
 		if wi.resp != nil {
-			c.reqID++
-			if c.reqID == 0 {
-				c.reqID = 1
+			nextReqID++
+			if nextReqID == 0 {
+				nextReqID = 1
 			}
-			reqID = c.reqID
+			reqID = nextReqID
 		}
 
 		if writeTimeout > 0 {
 			// Optimization: update write deadline only if more than 25%
 			// of the last write deadline exceeded.
 			// See https://github.com/golang/go/issues/15133 for details.
-			t := coarseTimeNow()
 			if t.Sub(lastWriteDeadline) > (writeTimeout >> 2) {
 				if err := conn.SetReadDeadline(t.Add(writeTimeout)); err != nil {
-					return fmt.Errorf("cannot update write deadline: %s", err)
+					panic(fmt.Sprintf("BUG: cannot update write deadline: %s", err))
 				}
 				lastWriteDeadline = t
 			}
@@ -509,7 +520,7 @@ func (c *Client) connReader(br *bufio.Reader, conn net.Conn) error {
 			t := coarseTimeNow()
 			if t.Sub(lastReadDeadline) > (readTimeout >> 2) {
 				if err := conn.SetReadDeadline(t.Add(readTimeout)); err != nil {
-					return fmt.Errorf("cannot update read deadline: %s", err)
+					panic(fmt.Sprintf("BUG: cannot update read deadline: %s", err))
 				}
 				lastReadDeadline = t
 			}
