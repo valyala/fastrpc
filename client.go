@@ -118,7 +118,6 @@ type Client struct {
 	pendingResponses     map[uint32]*clientWorkItem
 	pendingResponsesLock sync.Mutex
 
-	reqID                uint32
 	pendingRequestsCount uint32
 }
 
