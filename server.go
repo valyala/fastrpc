@@ -249,7 +249,9 @@ func (s *Server) connReader(br *bufio.Reader, conn net.Conn, pendingResponses ch
 			t := coarseTimeNow()
 			if t.Sub(lastReadDeadline) > (readTimeout >> 2) {
 				if err := conn.SetReadDeadline(t.Add(readTimeout)); err != nil {
-					panic(fmt.Sprintf("BUG: cannot update read deadline: %s", err))
+					// do not panic here, since the error may
+					// indicate that the connection is already closed
+					return fmt.Errorf("cannot update read deadline: %s", err)
 				}
 				lastReadDeadline = t
 			}
@@ -367,8 +369,10 @@ func (s *Server) connWriter(bw *bufio.Writer, conn net.Conn, pendingResponses <-
 			// See https://github.com/golang/go/issues/15133 for details.
 			t := coarseTimeNow()
 			if t.Sub(lastWriteDeadline) > (writeTimeout >> 2) {
-				if err := conn.SetReadDeadline(t.Add(writeTimeout)); err != nil {
-					panic(fmt.Sprintf("BUG: cannot update write deadline: %s", err))
+				if err := conn.SetWriteDeadline(t.Add(writeTimeout)); err != nil {
+					// do not panic here, since the error may
+					// indicate that the connection is already closed
+					return fmt.Errorf("cannot update write deadline: %s", err)
 				}
 				lastWriteDeadline = t
 			}
