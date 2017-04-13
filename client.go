@@ -494,7 +494,7 @@ func (c *Client) connWriter(bw *bufio.Writer, conn net.Conn, stopCh <-chan struc
 		}
 
 		// re-arm flush channel
-		if len(c.pendingRequests) == 0 {
+		if flushCh == nil && len(c.pendingRequests) == 0 {
 			if maxBatchDelay > 0 {
 				resetFlushTimer(flushTimer, maxBatchDelay)
 				flushCh = flushTimer.C

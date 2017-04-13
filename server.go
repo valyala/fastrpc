@@ -388,7 +388,7 @@ func (s *Server) connWriter(bw *bufio.Writer, conn net.Conn, pendingResponses <-
 		s.releaseWorkItem(wi)
 
 		// re-arm flush channel
-		if len(pendingResponses) == 0 {
+		if flushCh == nil && len(pendingResponses) == 0 {
 			if maxBatchDelay > 0 {
 				resetFlushTimer(flushTimer, maxBatchDelay)
 				flushCh = flushTimer.C
