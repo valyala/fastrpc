@@ -2,8 +2,10 @@ package tlv
 
 import (
 	"bufio"
+	"fmt"
 	"github.com/valyala/fasthttp"
 	"net"
+	"sync"
 )
 
 // RequestCtx implements fastrpc.HandlerCtx
@@ -16,7 +18,7 @@ type RequestCtx struct {
 	Response Response
 
 	conn   net.Conn
-	logger fasthttp.Logger
+	logger ctxLogger
 }
 
 // ConcurrencyLimitError implements the corresponding method
@@ -32,7 +34,9 @@ func (ctx *RequestCtx) Init(conn net.Conn, logger fasthttp.Logger) {
 	ctx.Request.Reset()
 	ctx.Response.Reset()
 	ctx.conn = conn
-	ctx.logger = logger
+
+	ctx.logger.ctx = ctx
+	ctx.logger.logger = logger
 }
 
 // ReadRequest implements the corresponding method of fastrpc.HandlerCtx.
@@ -52,7 +56,7 @@ func (ctx *RequestCtx) Conn() net.Conn {
 
 // Logger returns logger associated with the current RequestCtx.
 func (ctx *RequestCtx) Logger() fasthttp.Logger {
-	return ctx.logger
+	return &ctx.logger
 }
 
 // Write appends p to ctx.Response's value.
@@ -97,4 +101,19 @@ func (ctx *RequestCtx) RemoteIP() net.IP {
 
 var zeroTCPAddr = &net.TCPAddr{
 	IP: net.IPv4zero,
+}
+
+var ctxLoggerLock sync.Mutex
+
+type ctxLogger struct {
+	ctx    *RequestCtx
+	logger fasthttp.Logger
+}
+
+func (cl *ctxLogger) Printf(format string, args ...interface{}) {
+	ctxLoggerLock.Lock()
+	msg := fmt.Sprintf(format, args...)
+	ctx := cl.ctx
+	cl.logger.Printf("%s<->%s - %s", ctx.LocalAddr(), ctx.RemoteAddr(), msg)
+	ctxLoggerLock.Unlock()
 }
