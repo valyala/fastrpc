@@ -137,6 +137,8 @@ var (
 // req cannot be used after SendNowait returns and until releaseReq is called.
 // releaseReq is called when the req is no longer needed and may be re-used.
 //
+// req cannot be re-used if releaseReq is nil.
+//
 // Returns true if the request is successfully scheduled for sending,
 // otherwise returns false.
 //
